@@ -1,0 +1,48 @@
+# GRPO Data Collection Configuration
+
+grpo_collection:
+  # Question generation settings
+  num_generations: 8          # Number of candidate questions per turn
+  max_depth: 3                # Maximum tree depth
+  branch_factor: 2            # Number of top questions to branch from
+
+  # Initial prompt
+  beginning_prompt: "Discover the user's preferences about cars"
+
+  # Domain and persona
+  domain: "cars"
+  persona: "likes fast cars but is on a budget"
+
+  # Model settings
+  model: "mistralai/Mixtral-8x7B-Instruct-v0.1"
+  temperature_question: 0.8   # Higher for diverse question generation
+  temperature_answer: 0.1     # Lower for consistent PLLM answers
+  temperature_eval: 0.1       # Lower for consistent evaluator
+
+  # Evaluation settings
+  num_items: 10               # Number of items to compare
+  num_pairs: 20               # Number of pairs for evaluation
+
+  # Output settings
+  output_dir: "grpo_data_collection/outputs"
+  save_intermediate: true     # Save data after each depth
+
+# Alternative personas for experimentation
+personas:
+  budget_conscious: "likes fast cars but is on a budget"
+  luxury_seeker: "values luxury and comfort over performance"
+  eco_friendly: "prioritizes fuel efficiency and environmental impact"
+  family_oriented: "needs a practical family car with safety features"
+  enthusiast: "car enthusiast who values performance and handling"
+
+# Alternative domains for future expansion
+domains:
+  cars:
+    description: "automobile preferences"
+    num_items: 10
+  restaurants:
+    description: "dining preferences"
+    num_items: 10
+  movies:
+    description: "entertainment preferences"
+    num_items: 10
