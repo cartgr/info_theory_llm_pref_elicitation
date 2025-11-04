@@ -2,9 +2,11 @@
 
 import os
 import json
+import time
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from together import Together
+import together.error
 
 from .config import get_api_key
 
@@ -46,9 +48,10 @@ class TogetherChat:
         user: str,
         response_format: Optional[Dict[str, Any]] = None,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        max_retries: int = 5
     ) -> str:
-        """Send a chat completion request."""
+        """Send a chat completion request with retry logic."""
         # Add JSON instruction if using JSON mode
         if response_format:
             system = system + "\nOnly respond in valid JSON matching the provided schema."
@@ -68,22 +71,33 @@ class TogetherChat:
         if response_format:
             kwargs["response_format"] = response_format
 
-        try:
-            response = self.client.chat.completions.create(**kwargs)
-            if not response or not response.choices:
-                print(f"DEBUG: No response or choices. Response: {response}")
-                return ""
+        # Retry loop with exponential backoff
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+                if not response or not response.choices:
+                    print(f"DEBUG: No response or choices. Response: {response}")
+                    return ""
 
-            content = response.choices[0].message.content
-            if content is None:
-                print(f"DEBUG: Content is None. Response: {response}")
-                return ""
+                content = response.choices[0].message.content
+                if content is None:
+                    print(f"DEBUG: Content is None. Response: {response}")
+                    return ""
 
-            return content.strip()
-        except Exception as e:
-            print(f"Error in Together API call: {e}")
-            print(f"DEBUG: kwargs were: {kwargs}")
-            raise
+                return content.strip()
+            except together.error.ServiceUnavailableError as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    print(f"API overloaded (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error in Together API call after {max_retries} attempts: {e}")
+                    print(f"DEBUG: kwargs were: {kwargs}")
+                    raise
+            except Exception as e:
+                print(f"Error in Together API call: {e}")
+                print(f"DEBUG: kwargs were: {kwargs}")
+                raise
 
     def get_ab_preference(
         self,
@@ -205,6 +219,94 @@ class TogetherChat:
             print(f"Response: {response[:100]}")
             # Default to uniform on error
             return 0.5
+
+    def get_eval_probability_logprobs(
+        self,
+        answers: str,
+        option_a: str,
+        option_b: str
+    ) -> float:
+        """Get evaluator probability using logprobs (more efficient and accurate).
+
+        This works by:
+        1. Prefill assistant response with 'A', get logprob
+        2. Prefill assistant response with 'B', get logprob
+        3. Calculate P(A > B) from the logprobs
+        """
+        import math
+
+        system = (
+            "You are a calibrated evaluator. Based on the participant's answers, "
+            "determine if they prefer option A over option B."
+        )
+
+        user = (
+            f"Transcript (participant answers only):\n{answers}\n\n"
+            f"Option A: {option_a}\n"
+            f"Option B: {option_b}\n\n"
+            f"Which option does the participant prefer?"
+        )
+
+        def get_token_logprob(prefill_response: str) -> float:
+            """Get logprob for a prefilled response."""
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+                {"role": "assistant", "content": prefill_response}  # Prefill with A or B
+            ]
+
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=1,
+                    temperature=0.0,
+                    logprobs=1,
+                    echo=True  # Echo to get logprobs of the prefilled token
+                )
+
+                if not response or not response.choices:
+                    return float('-inf')
+
+                choice = response.choices[0]
+                if not choice.logprobs or not choice.logprobs.content:
+                    return float('-inf')
+
+                # Find the logprob for our prefilled token
+                for token_data in choice.logprobs.content:
+                    token = token_data.token.strip()
+                    if prefill_response in token or token in prefill_response:
+                        return token_data.logprob
+
+                # If we didn't find it in the echoed tokens, try the generated ones
+                if choice.logprobs.content:
+                    return choice.logprobs.content[-1].logprob
+
+                return float('-inf')
+
+            except Exception as e:
+                print(f"Error getting logprob for '{prefill_response}': {e}")
+                return float('-inf')
+
+        # Get logprobs for both options
+        logprob_a = get_token_logprob("A")
+        logprob_b = get_token_logprob("B")
+
+        # Calculate probability
+        if logprob_a == float('-inf') and logprob_b == float('-inf'):
+            return 0.5  # No information
+        elif logprob_b == float('-inf'):
+            return 0.999  # Only A is possible
+        elif logprob_a == float('-inf'):
+            return 0.001  # Only B is possible
+        else:
+            # P(A) = exp(logprob_A) / (exp(logprob_A) + exp(logprob_B))
+            prob_a = math.exp(logprob_a)
+            prob_b = math.exp(logprob_b)
+            p_a_over_b = prob_a / (prob_a + prob_b)
+
+            # Clip to avoid log(0) issues
+            return min(0.999, max(0.001, p_a_over_b))
 
     def answer_question(
         self,

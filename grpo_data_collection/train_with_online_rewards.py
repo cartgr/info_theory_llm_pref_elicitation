@@ -171,26 +171,42 @@ def main():
     print("Training complete!")
     print("=" * 60)
 
-    # Test generation
+    # Test generation with proper chat format
     print("\nTesting trained model...")
-    test_prompt = "You are interviewing someone about their cars preferences. Ask one specific question to learn what they're looking for.\n\nQuestion:"
+
+    # Create test message in chat format
+    test_messages = [
+        {"role": "system", "content": "You are interviewing someone about their cars preferences."},
+        {"role": "user", "content": "Ask one specific question to learn what they're looking for."}
+    ]
+
+    # Apply chat template
+    test_prompt = tokenizer.apply_chat_template(
+        test_messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
 
     inputs = tokenizer(test_prompt, return_tensors="pt").to(model.device)
 
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=50,
+            max_new_tokens=100,
             temperature=0.7,
             do_sample=True,
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id
         )
 
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    question = generated[len(test_prompt):].strip()
+    # Decode only new tokens
+    question = tokenizer.decode(
+        outputs[0][inputs['input_ids'].shape[1]:],
+        skip_special_tokens=True
+    ).strip()
 
     print(f"\nSample generation:")
-    print(f"  Prompt: Ask a car preference question")
+    print(f"  Task: Ask a car preference question")
     print(f"  Generated: {question}")
     print(f"\nFull output saved to: {output_path}")
 

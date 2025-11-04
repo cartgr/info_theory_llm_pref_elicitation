@@ -22,8 +22,8 @@ class EvaluatorD:
         # Format answers for evaluation
         answers_text = transcript.format_answers_for_eval()
 
-        # Get probability from Together API
-        prob = self.chat.get_eval_probability(
+        # Get probability using logprobs method (more efficient and accurate)
+        prob = self.chat.get_eval_probability_logprobs(
             answers=answers_text,
             option_a=option_a,
             option_b=option_b
