@@ -68,16 +68,22 @@ class EpisodeLogger:
         }
         self.logs.append(log_entry)
 
-    def save(self, seed: Optional[int] = None) -> None:
+    def save(self, seed: Optional[int] = None, suffix: Optional[str] = None) -> None:
         """Save logs to file."""
-        suffix = f"_seed{seed}" if seed is not None else ""
-        json_path = self.output_dir / f"episode_logs{suffix}.json"
+        if suffix is not None:
+            file_suffix = suffix
+        elif seed is not None:
+            file_suffix = f"_seed{seed}"
+        else:
+            file_suffix = ""
+
+        json_path = self.output_dir / f"episode_logs{file_suffix}.json"
         save_json(self.logs, json_path)
 
         # Also save as CSV for easy analysis
         if self.logs:
             df = pd.DataFrame(self.logs)
-            csv_path = self.output_dir / f"episode_logs{suffix}.csv"
+            csv_path = self.output_dir / f"episode_logs{file_suffix}.csv"
             df.to_csv(csv_path, index=False)
 
     def get_summary(self) -> Dict:

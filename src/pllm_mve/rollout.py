@@ -40,7 +40,8 @@ def run_greedy_episode(
             domain=config.domain,
             items=eval_set.items,
             transcript=transcript,
-            pool_size=config.num_items  # Use num_items as pool size
+            pool_size=config.num_items,  # Use num_items as pool size
+            client=pllm.chat  # Use same client as PLLM
         )
 
         # Select best question greedily
@@ -103,7 +104,8 @@ def run_random_episode(
             domain=config.domain,
             items=eval_set.items,
             transcript=transcript,
-            pool_size=config.num_items
+            pool_size=config.num_items,
+            client=pllm.chat  # Use same client as PLLM
         )
 
         # Select random question

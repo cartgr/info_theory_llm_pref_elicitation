@@ -9,7 +9,8 @@ from .evaluator import EvaluatorD
 def log_score(
     eval_set: EpisodeEvalSet,
     transcript: Transcript,
-    evaluator: EvaluatorD
+    evaluator: EvaluatorD,
+    verbose: bool = False
 ) -> float:
     """
     Compute log-scoring objective F(s).
@@ -20,6 +21,7 @@ def log_score(
         return 0.0
 
     total_log_prob = 0.0
+    predictions = []  # Track for verbose output
 
     for pair in eval_set.pairs:
         i, j = pair
@@ -28,6 +30,15 @@ def log_score(
 
         # Get true label
         y = eval_set.labels.get(pair, 0)
+
+        # Track prediction
+        predictions.append({
+            'pair': pair,
+            'true_label': y,
+            'pred_prob': p,
+            'item_a': eval_set.items[i][:40],
+            'item_b': eval_set.items[j][:40]
+        })
 
         # Compute log probability of the correct label
         if y == 1:
@@ -41,6 +52,23 @@ def log_score(
         q = min(1.0 - 1e-6, max(1e-6, q))
 
         total_log_prob += math.log(q)
+
+    # Print verbose output if requested
+    if verbose:
+        print(f"\n  Evaluation on {len(eval_set.pairs)} pairs:")
+        print(f"  {'Pair':<8} {'True':<6} {'Pred':<6} {'Item A vs Item B'}")
+        print(f"  {'-'*70}")
+        for pred in predictions:
+            pair_str = f"({pred['pair'][0]},{pred['pair'][1]})"
+            true_str = "A>B" if pred['true_label'] == 1 else "B>A"
+            pred_str = f"{pred['pred_prob']:.3f}"
+            print(f"  {pair_str:<8} {true_str:<6} {pred_str:<6} {pred['item_a']}... vs {pred['item_b']}...")
+
+        # Calculate accuracy if we threshold at 0.5
+        correct = sum(1 for p in predictions if (p['pred_prob'] > 0.5) == (p['true_label'] == 1))
+        accuracy = correct / len(predictions)
+        print(f"\n  Accuracy @ 0.5: {accuracy:.2%} ({correct}/{len(predictions)})")
+        print(f"  Average score: {total_log_prob / len(eval_set.pairs):.4f}\n")
 
     # Return average log probability
     return total_log_prob / len(eval_set.pairs)

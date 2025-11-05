@@ -75,6 +75,7 @@ class TogetherChat:
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(**kwargs)
+
                 if not response or not response.choices:
                     print(f"DEBUG: No response or choices. Response: {response}")
                     return ""
@@ -229,84 +230,86 @@ class TogetherChat:
         """Get evaluator probability using logprobs (more efficient and accurate).
 
         This works by:
-        1. Prefill assistant response with 'A', get logprob
-        2. Prefill assistant response with 'B', get logprob
-        3. Calculate P(A > B) from the logprobs
+        1. Ask model to choose between A and B
+        2. Get logprobs for the first generated token
+        3. Extract P(A) and P(B) from the top_logprobs
+        4. Calculate P(A > B) = P(A) / (P(A) + P(B))
         """
         import math
 
         system = (
             "You are a calibrated evaluator. Based on the participant's answers, "
-            "determine if they prefer option A over option B."
+            "determine if they prefer option A over option B. "
+            "Respond with only a single letter: A or B."
         )
 
         user = (
             f"Transcript (participant answers only):\n{answers}\n\n"
             f"Option A: {option_a}\n"
             f"Option B: {option_b}\n\n"
-            f"Which option does the participant prefer?"
+            f"Which option does the participant prefer? Answer with only 'A' or 'B'."
         )
 
-        def get_token_logprob(prefill_response: str) -> float:
-            """Get logprob for a prefilled response."""
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-                {"role": "assistant", "content": prefill_response}  # Prefill with A or B
-            ]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ]
 
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=1,
-                    temperature=0.0,
-                    logprobs=1,
-                    echo=True  # Echo to get logprobs of the prefilled token
-                )
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=1,
+            temperature=0.0,
+            logprobs=5  # Get top 5 logprobs (API maximum)
+        )
 
-                if not response or not response.choices:
-                    return float('-inf')
+        if not response or not response.choices:
+            raise RuntimeError("No response from API")
 
-                choice = response.choices[0]
-                if not choice.logprobs or not choice.logprobs.content:
-                    return float('-inf')
+        choice = response.choices[0]
+        if not choice.logprobs:
+            raise RuntimeError("No logprobs in response")
 
-                # Find the logprob for our prefilled token
-                for token_data in choice.logprobs.content:
-                    token = token_data.token.strip()
-                    if prefill_response in token or token in prefill_response:
-                        return token_data.logprob
+        # Extract logprobs for A and B
+        logprob_a = None
+        logprob_b = None
 
-                # If we didn't find it in the echoed tokens, try the generated ones
-                if choice.logprobs.content:
-                    return choice.logprobs.content[-1].logprob
+        # Check if we have top_logprobs (contains dict of token -> logprob)
+        if hasattr(choice.logprobs, 'top_logprobs') and choice.logprobs.top_logprobs:
+            top_logprobs = choice.logprobs.top_logprobs[0]  # First token's top logprobs
 
-                return float('-inf')
+            # DEBUG: Print what tokens we got
+            print(f"    DEBUG: top_logprobs keys: {list(top_logprobs.keys())}")
 
-            except Exception as e:
-                print(f"Error getting logprob for '{prefill_response}': {e}")
-                return float('-inf')
+            # top_logprobs is a dict like {'A': -0.5, 'B': -1.2, ...}
+            for token, logprob in top_logprobs.items():
+                token_clean = token.strip().upper()
+                if token_clean == 'A':
+                    logprob_a = logprob
+                elif token_clean == 'B':
+                    logprob_b = logprob
 
-        # Get logprobs for both options
-        logprob_a = get_token_logprob("A")
-        logprob_b = get_token_logprob("B")
+        # If one of A or B is not in top 5, assign it a very low probability
+        if logprob_a is None and logprob_b is None:
+            # Neither found - shouldn't happen, but fall back to 0.5
+            print(f"    WARNING: Neither A nor B in top logprobs: {list(top_logprobs.keys())}")
+            return 0.5
+        elif logprob_a is None:
+            # A not in top 5, B is very confident
+            print(f"    INFO: 'A' not in top 5, assuming P(A>B) ≈ 0")
+            return 0.001
+        elif logprob_b is None:
+            # B not in top 5, A is very confident
+            print(f"    INFO: 'B' not in top 5, assuming P(A>B) ≈ 1")
+            return 0.999
 
-        # Calculate probability
-        if logprob_a == float('-inf') and logprob_b == float('-inf'):
-            return 0.5  # No information
-        elif logprob_b == float('-inf'):
-            return 0.999  # Only A is possible
-        elif logprob_a == float('-inf'):
-            return 0.001  # Only B is possible
-        else:
-            # P(A) = exp(logprob_A) / (exp(logprob_A) + exp(logprob_B))
-            prob_a = math.exp(logprob_a)
-            prob_b = math.exp(logprob_b)
-            p_a_over_b = prob_a / (prob_a + prob_b)
+        # P(A) = exp(logprob_A) / (exp(logprob_A) + exp(logprob_B))
+        prob_a = math.exp(logprob_a)
+        prob_b = math.exp(logprob_b)
+        p_a_over_b = prob_a / (prob_a + prob_b)
 
-            # Clip to avoid log(0) issues
-            return min(0.999, max(0.001, p_a_over_b))
+        # Clip to avoid log(0) issues
+        return min(0.999, max(0.001, p_a_over_b))
 
     def answer_question(
         self,
