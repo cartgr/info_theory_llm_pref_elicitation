@@ -137,8 +137,13 @@ def main():
     print(f"Training complete! Model saved to {output_dir}/final_model")
 
     # Example generation with trained model
-    print("\nExample generation with trained model:")
-    prompt = "Context: [empty]\nTask: Discover the user's preferences about cars"
+    # print("\nExample generation with trained model:")
+    # prompt = "Context: [empty]\nTask: Discover the user's preferences about cars"
+    messages = [
+        {"role": "system", "content": "You are interviewing someone about their cars preferences."},
+        {"role": "user", "content": "Ask one specific question to learn what they're looking for."}
+        ]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 

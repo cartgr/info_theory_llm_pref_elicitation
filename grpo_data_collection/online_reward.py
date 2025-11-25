@@ -14,6 +14,7 @@ from src.pllm_mve.pllm import PLLM
 from src.pllm_mve.evaluator import EvaluatorD
 from src.pllm_mve.together_client import TogetherChat
 from src.pllm_mve.eval_items import get_car_items, generate_item_pairs
+from src.pllm_mve.responder import ResponderLLM
 
 
 @dataclass
@@ -47,6 +48,12 @@ class OnlineRewardCalculator:
         self.chat = TogetherChat(temperature=0.1)
         self.pllm = PLLM(chat_client=self.chat)
         self.evaluator = EvaluatorD(chat_client=self.chat)
+
+        self.responder = ResponderLLM(
+            chat_client=TogetherChat(temperature=0.7)  # distinct instance/temperature
+        )
+        self.responder.initialize_persona(persona)
+
 
         # Set up evaluation items
         if domain == "cars":
@@ -120,7 +127,7 @@ class OnlineRewardCalculator:
                 print(f"Computing reward for question {i+1}/{len(questions)}: {question[:50]}...")
 
                 # Get PLLM answer
-                answer = self.pllm.answer_question(question)
+                answer = self.responder.answer_question(question)
 
                 # Create new transcript with this Q&A
                 new_transcript = Transcript(turns=base_transcript.turns.copy())

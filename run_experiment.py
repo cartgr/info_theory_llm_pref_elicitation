@@ -74,55 +74,62 @@ def setup_episode(config: EpisodeConfig, seed: int = None) -> EpisodeEvalSet:
     return eval_set
 
 
-def run_single_seed(
-    config,
-    seed: int,
-    output_dir: Path
-) -> dict:
-    """Run experiment for a single seed."""
+def run_single_seed(config, seed: int, output_dir: Path) -> dict:
+    """Run experiment for a single seed with separate responder LLM."""
     print(f"\n{'='*60}")
     print(f"RUNNING SEED {seed}")
     print(f"{'='*60}")
 
-    # Setup episode
+    # Setup episode (items, pairs, labels via PLLM)
     eval_set = setup_episode(config.episode, seed)
 
     # Save episode data
     seed_dir = output_dir / f"seed_{seed}"
     seed_dir.mkdir(parents=True, exist_ok=True)
-
     episode_data = {
         "seed": seed,
         "items": eval_set.items,
         "pairs": eval_set.pairs,
         "labels": {str(k): v for k, v in eval_set.labels.items()}
     }
+    from pllm_mve.io_utils import save_json
     save_json(episode_data, seed_dir / "episode_data.json")
 
-    # Initialize PLLM and Evaluator for the episode
-    chat = TogetherChat(
+    # Evaluator (uses Together client)
+    from pllm_mve.together_client import TogetherChat
+    evaluator_client = TogetherChat(
         model=config.episode.model,
         max_tokens=config.episode.max_tokens,
         temperature=config.episode.temperature
     )
-    pllm = PLLM(chat)
-    pllm.initialize_persona(config.episode.persona, eval_set)
+    from pllm_mve.evaluator import EvaluatorD
+    evaluator = EvaluatorD(evaluator_client)
 
-    evaluator = EvaluatorD(chat)
+    # Responder LLM
+    from pllm_mve.responder import ResponderLLM
+    responder = ResponderLLM(
+        chat_client=TogetherChat(
+            model=config.episode.model,
+            max_tokens=64,
+            temperature=0.8              # higher temp to diversify answers
+        )
+    )
+    responder.initialize_persona(config.episode.persona)
 
-    # Run comparison
+    # Compare policies (now using responder for answers)
+    from pllm_mve.rollout import compare_policies
     comparison = compare_policies(
         config=config.episode,
-        pllm=pllm,
+        responder=responder,
         evaluator=evaluator,
         eval_set=eval_set,
         output_dir=seed_dir
     )
 
-    # Save comparison results
+    # Save comparison
     save_json(comparison, seed_dir / "comparison.json")
-
     return comparison
+
 
 
 def main():

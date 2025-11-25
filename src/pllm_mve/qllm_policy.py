@@ -93,18 +93,13 @@ def generate_candidate_questions(
 
 def select_greedy_question(
     questions: List[str],
-    pllm: PLLM,
+    responder,  # ResponderLLM
     evaluator: EvaluatorD,
     eval_set: EpisodeEvalSet,
     transcript: Transcript
 ) -> Tuple[str, str, float]:
-    """
-    Select the question that maximizes expected information gain.
-
-    Returns:
-        (best_question, best_answer, best_gain)
-    """
-    # Compute baseline score
+    """Select the question that maximizes information gain (using ResponderLLM to sample the *actual* answer)."""
+    from .scoring import log_score
     baseline_score = log_score(eval_set, transcript, evaluator)
 
     best_question = None
@@ -112,120 +107,69 @@ def select_greedy_question(
     best_gain = float("-inf")
 
     for question in questions:
-        # Get hypothetical answer from PLLM
-        answer = pllm.answer_question(question)
+        # Hypothetical: use responder to sample the answer
+        answer = responder.answer_question(question)
+        trial = Transcript(turns=transcript.turns.copy())
+        trial.add_turn(question, answer)
 
-        # Create trial transcript
-        trial_transcript = Transcript(turns=transcript.turns.copy())
-        trial_transcript.add_turn(question, answer)
-
-        # Compute new score
-        new_score = log_score(eval_set, trial_transcript, evaluator)
+        new_score = log_score(eval_set, trial, evaluator)
         gain = new_score - baseline_score
 
-        # Track best
         if gain > best_gain:
+            best_gain = gain
             best_question = question
             best_answer = answer
-            best_gain = gain
 
     return best_question, best_answer, best_gain
 
 
 def select_random_question(
     questions: List[str],
-    pllm: PLLM
+    responder  # ResponderLLM
 ) -> Tuple[str, str]:
-    """
-    Select a random question (baseline).
-
-    Returns:
-        (question, answer)
-    """
+    """Random baseline using the responder for the answer."""
+    import random
     question = random.choice(questions)
-    answer = pllm.answer_question(question)
+    answer = responder.answer_question(question)
     return question, answer
 
 
 def select_bestofn_question(
     questions: List[str],
-    pllm: PLLM,
+    responder,  # ResponderLLM
     evaluator: EvaluatorD,
     eval_set: EpisodeEvalSet,
     transcript: Transcript,
     num_samples: int = 3
 ) -> Tuple[str, str, float]:
     """
-    Select the question that maximizes EXPECTED information gain.
-
-    For each candidate question:
-    - Sample num_samples hypothetical answers
-    - Compute information gain for each answer
-    - Average the gains to get expected gain
-
-    Then select the question with highest expected gain and ask it for real.
-
-    Args:
-        questions: Pool of candidate questions
-        pllm: PLLM to answer questions
-        evaluator: Evaluator to score transcripts
-        eval_set: Fixed evaluation set of pairs
-        transcript: Current conversation transcript
-        num_samples: Number of hypothetical answers to sample per question (t)
-
-    Returns:
-        (best_question, actual_answer, expected_gain)
+    Best-of-N selection using expected information gain.
+    For each candidate: sample 'num_samples' answers from the *responder* (not PLLM),
+    compute mean gain, pick the best, then get one more actual answer for the chosen Q.
     """
-    from tqdm import tqdm
+    from .scoring import log_score
+    import numpy as np
 
-    # Compute baseline score
     baseline_score = log_score(eval_set, transcript, evaluator)
-
     best_question = None
     best_expected_gain = float("-inf")
-    question_gains = {}  # Store for debugging
 
-    print(f"\n  Evaluating {len(questions)} candidate questions with {num_samples} samples each...")
-
-    for q_idx, question in enumerate(tqdm(questions, desc="  Candidates", leave=False)):
+    for question in questions:
         gains = []
+        for _ in range(num_samples):
+            a = responder.answer_question(question)
+            trial = Transcript(turns=transcript.turns.copy())
+            trial.add_turn(question, a)
+            new_score = log_score(eval_set, trial, evaluator)
+            gains.append(new_score - baseline_score)
 
-        # Sample multiple hypothetical answers
-        for sample_idx in range(num_samples):
-            # Get hypothetical answer from PLLM
-            answer = pllm.answer_question(question)
-
-            # Create trial transcript
-            trial_transcript = Transcript(turns=transcript.turns.copy())
-            trial_transcript.add_turn(question, answer)
-
-            # Compute new score and gain
-            new_score = log_score(eval_set, trial_transcript, evaluator)
-            gain = new_score - baseline_score
-            gains.append(gain)
-
-        # Calculate expected gain (mean)
-        expected_gain = np.mean(gains)
-        question_gains[question] = expected_gain
-
-        # Print details for this question
-        print(f"\n    Q{q_idx+1}: {question[:80]}...")
-        print(f"         Gains: {[f'{g:.3f}' for g in gains]} → Mean: {expected_gain:.3f}")
-
-        # Track best
+        expected_gain = float(np.mean(gains)) if gains else 0.0
         if expected_gain > best_expected_gain:
-            best_question = question
             best_expected_gain = expected_gain
+            best_question = question
 
-    # Print selection result
-    print(f"\n  ✓ Selected question with expected gain: {best_expected_gain:.3f}")
-    print(f"    Question: {best_question}")
-
-    # Now actually ask the best question
-    print(f"\n  Asking PLLM the selected question...")
-    actual_answer = pllm.answer_question(best_question)
-    print(f"  Answer: {actual_answer}")
-
+    # Ask once "for real" (also via responder — same distribution)
+    actual_answer = responder.answer_question(best_question)
     return best_question, actual_answer, best_expected_gain
 
 
@@ -233,29 +177,20 @@ def select_direct_question(
     domain: str,
     items: List[str],
     transcript: Transcript,
-    pllm: PLLM,
-    client: Optional[TogetherChat] = None
+    responder,                      # ResponderLLM-like object with .answer_question()
+    client: Optional[TogetherChat] = None,
 ) -> Tuple[str, str]:
     """
-    Generate a single maximally informative question directly (baseline).
+    Generate a single question directly with an LLM and answer it with the responder.
 
-    Uses an LLM to generate a question with instruction to be maximally informative,
-    without any evaluation or best-of-n selection.
-
-    Args:
-        domain: Domain for the question (e.g., "cars")
-        items: List of items in the domain
-        transcript: Current conversation transcript
-        pllm: PLLM to answer the question
-        client: Together API client (creates new one if None)
-
-    Returns:
-        (question, answer)
+    This is the 'direct' baseline: no best-of-n search, just:
+      1) Use client (question LLM) to generate one informative question.
+      2) Use responder to answer that question given the persona.
     """
     if client is None:
         client = TogetherChat()
 
-    # Build context from transcript
+    # Build conversation context
     context = ""
     if transcript.turns:
         context = "Previous conversation:\n"
@@ -263,37 +198,33 @@ def select_direct_question(
             context += f"Q{i+1}: {turn.question}\n"
             context += f"A{i+1}: {turn.answer}\n\n"
 
-    # Build system prompt (same as best-of-n for fair comparison)
+    # System prompt: interviewer that knows the domain & items
     system = (
         f"You are an expert interviewer trying to learn someone's preferences about {domain}. "
         f"Generate informative questions that will help uncover their preferences.\n\n"
-        f"The items being considered are:\n" + "\n".join(f"- {item}" for item in items[:10]) +
-        (f"\n...and {len(items) - 10} more" if len(items) > 10 else "")
+        f"The items being considered are:\n"
+        + "\n".join(f"- {item}" for item in items[:10])
+        + (f"\n...and {len(items) - 10} more" if len(items) > 10 else "")
     )
 
-    # Build user prompt (same structure as best-of-n)
+    # User prompt: ask for one targeted, conversational question
     user = (
         f"{context}\n"
         f"Generate 1 question to ask next. The question should:\n"
         f"- Be specific and targeted\n"
         f"- Help reveal preferences about {domain}\n"
         f"- Be natural and conversational\n\n"
-        f"Return ONLY the question, nothing else."
+        f"Return ONLY the question text, with no numbering or extra commentary."
     )
 
-    # Generate question
-    print(f"\n  Generating 1 question using LLM...")
     question = client.chat(
         system=system,
         user=user,
-        temperature=0.8,  # Same temperature as best-of-n for fair comparison
-        max_tokens=100
-    )
-    print(f"  Question: {question}")
+        temperature=0.8,
+        max_tokens=100,
+    ).strip()
 
-    # Get answer from PLLM
-    print(f"\n  Asking PLLM...")
-    answer = pllm.answer_question(question)
-    print(f"  Answer: {answer}")
+    # Answer is produced by the responder LLM (separate from PLLM/evaluator)
+    answer = responder.answer_question(question)
 
     return question, answer

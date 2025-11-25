@@ -66,6 +66,7 @@ class GRPOCollector:
         self.pllm.initialize_persona(persona, self.eval_set)
         self.evaluator = EvaluatorD(chat_client=self.chat)
         self.question_gen = QuestionGenerator(chat_client=self.chat)
+        self.responder = responder or QuestionGenerator(chat_client=self.chat)
 
         # Collect PLLM labels once
         self.pllm_labels = self._collect_pllm_labels()
@@ -112,7 +113,7 @@ class GRPOCollector:
 
         for question in questions:
             # Get PLLM answer
-            answer = self.pllm.answer_question(question)
+            answer = self.responder.answer_question(question)
             answers.append(answer)
 
             # Create new transcript with this Q&A

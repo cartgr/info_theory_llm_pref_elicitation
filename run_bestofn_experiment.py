@@ -25,11 +25,11 @@ from pllm_mve.qllm_policy import (
     select_direct_question
 )
 from pllm_mve.io_utils import create_experiment_dir, EpisodeLogger, save_json
-
+from pllm_mve.responder import ResponderLLM
 
 def run_bestofn_episode(
     config: EpisodeConfig,
-    pllm: PLLM,
+    responder: ResponderLLM,
     evaluator: EvaluatorD,
     eval_set: EpisodeEvalSet,
     logger: EpisodeLogger,
@@ -60,122 +60,122 @@ def run_bestofn_episode(
     transcript = Transcript()
 
     print(f"Starting best-of-n episode with {config.num_turns} turns...")
-    print(f"  Candidates per turn (k): {num_candidates}")
-    print(f"  Samples per candidate (t): {num_samples}")
+    print(f" Candidates per turn (k): {num_candidates}")
+    print(f" Samples per candidate (t): {num_samples}")
 
-    # Show initial baseline predictions
-    print(f"\n{'='*70}")
+    print("\n" + "="*70)
     print("INITIAL BASELINE (no conversation yet)")
-    print(f"{'='*70}")
+    print("="*70)
+
     f_prev = log_score(eval_set, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Best-of-n turns"):
-        # Generate candidate questions using LLM
+
+        # Step 1: Generate candidate questions
         questions = generate_candidate_questions(
             domain=config.domain,
             items=eval_set.items,
             transcript=transcript,
             pool_size=num_candidates,
-            client=pllm.chat  # Use same client as PLLM
+            client=evaluator.chat
         )
 
-        # Select best question using best-of-n with sampling
-        best_q, actual_a, expected_gain = select_bestofn_question(
-            questions=questions,
-            pllm=pllm,
-            evaluator=evaluator,
-            eval_set=eval_set,
-            transcript=transcript,
-            num_samples=num_samples
-        )
+        # Step 2: Compute expected gain via responder sampling
+        baseline_score = f_prev
+        best_q = None
+        best_expected_gain = float("-inf")
 
-        # Add to transcript
+        for q in questions:
+            gains = []
+            for _ in range(num_samples):
+                a = responder.answer_question(q)
+                trial = Transcript(turns=transcript.turns.copy())
+                trial.add_turn(q, a)
+                new_score = log_score(eval_set, trial, evaluator)
+                gains.append(new_score - baseline_score)
+
+            expected_gain = float(np.max(gains)) if gains else 0.0
+
+            print("\n" + "-"*60)
+            print(f"Candidate: {q[:80]}...")
+            print(f"Gains: {[f'{g:.3f}' for g in gains]} "
+                f"→ Max = {expected_gain:.3f}")
+
+            if expected_gain > best_expected_gain:
+                best_expected_gain = expected_gain
+                best_q = q
+
+
+        # Step 3: Ask chosen question “for real”
+        actual_a = responder.answer_question(best_q)
         transcript.add_turn(best_q, actual_a)
 
-        # Compute new score and show predictions
-        print(f"\n  {'='*70}")
-        print(f"  AFTER TURN {turn} - Updated predictions:")
-        print(f"  {'='*70}")
+        print("\n" + "="*70)
+        print(f" AFTER TURN {turn} - Updated predictions:")
+        print("="*70)
+
         f_new = log_score(eval_set, transcript, evaluator, verbose=True)
         reward = f_new - f_prev
 
-        # Log turn
         logger.log_turn(
             turn=turn,
             question=best_q,
             answer=actual_a,
             score=f_new,
             reward=reward,
-            expected_gain=expected_gain,
+            expected_gain=best_expected_gain,
             policy="bestofn"
         )
 
-        print(f"  Turn {turn} Summary: score={f_new:.4f}, reward={reward:.4f}, expected_gain={expected_gain:.4f}")
+        print(f" Turn {turn}: score={f_new:.4f}, "
+              f"reward={reward:.4f}, "
+              f"expected_gain={best_expected_gain:.4f}")
 
         f_prev = f_new
 
-    summary = logger.get_summary()
-    return transcript, summary
+    return transcript, logger.get_summary()
+
 
 
 def run_direct_episode(
     config: EpisodeConfig,
-    pllm: PLLM,
+    responder: ResponderLLM,
     evaluator: EvaluatorD,
     eval_set: EpisodeEvalSet,
     logger: EpisodeLogger,
     client: TogetherChat
 ) -> Tuple[Transcript, Dict]:
-    """
-    Run a direct baseline episode.
 
-    For each turn:
-    - Use LLM to directly generate a maximally informative question
-    - No evaluation or best-of-n selection
-    - Ask PLLM and get answer
-
-    Args:
-        config: Episode configuration
-        pllm: PLLM to answer questions
-        evaluator: Evaluator to score transcripts
-        eval_set: Fixed evaluation set
-        logger: Episode logger
-        client: Together API client for question generation
-
-    Returns:
-        (final_transcript, summary_stats)
-    """
     transcript = Transcript()
 
     print(f"Starting direct baseline episode with {config.num_turns} turns...")
 
-    # Show initial baseline predictions
-    print(f"\n{'='*70}")
+    print("\n" + "="*70)
     print("INITIAL BASELINE (no conversation yet)")
-    print(f"{'='*70}")
+    print("="*70)
+
     f_prev = log_score(eval_set, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Direct turns"):
-        # Generate question directly
+
+        # Generate one question directly, answer with responder
         question, answer = select_direct_question(
             domain=config.domain,
             items=eval_set.items,
             transcript=transcript,
-            pllm=pllm,
+            responder=responder,
             client=client
         )
 
-        # Add to transcript
         transcript.add_turn(question, answer)
 
-        # Compute new score and show predictions
-        print(f"\n  {'='*70}")
-        print(f"  AFTER TURN {turn} - Updated predictions:")
-        print(f"  {'='*70}")
+        print("\n" + "="*70)
+        print(f" AFTER TURN {turn} - Updated predictions:")
+        print("="*70)
+
         f_new = log_score(eval_set, transcript, evaluator, verbose=True)
         reward = f_new - f_prev
 
-        # Log turn
         logger.log_turn(
             turn=turn,
             question=question,
@@ -185,17 +185,16 @@ def run_direct_episode(
             policy="direct"
         )
 
-        print(f"  Turn {turn} Summary: score={f_new:.4f}, reward={reward:.4f}")
+        print(f" Turn {turn}: score={f_new:.4f}, reward={reward:.4f}")
 
         f_prev = f_new
 
-    summary = logger.get_summary()
-    return transcript, summary
+    return transcript, logger.get_summary()
 
 
 def compare_policies(
     config: EpisodeConfig,
-    pllm: PLLM,
+    responder: ResponderLLM,
     evaluator: EvaluatorD,
     eval_set: EpisodeEvalSet,
     output_dir: Path,
@@ -203,33 +202,41 @@ def compare_policies(
     num_samples: int = 3,
     client: TogetherChat = None
 ) -> Dict:
-    """Run both best-of-n and direct episodes and compare."""
+
     if client is None:
         client = TogetherChat()
 
-    # Run best-of-n episode
-    print("\n" + "=" * 60)
+    print("\n" + "="*60)
     print("RUNNING BEST-OF-N POLICY")
-    print("=" * 60)
+    print("="*60)
+
     bestofn_logger = EpisodeLogger(output_dir)
     bestofn_transcript, bestofn_summary = run_bestofn_episode(
-        config, pllm, evaluator, eval_set, bestofn_logger,
+        config=config,
+        responder=responder,
+        evaluator=evaluator,
+        eval_set=eval_set,
+        logger=bestofn_logger,
         num_candidates=num_candidates,
         num_samples=num_samples
     )
     bestofn_logger.save(suffix="_bestofn")
 
-    # Run direct baseline
-    print("\n" + "=" * 60)
+    print("\n" + "="*60)
     print("RUNNING DIRECT BASELINE")
-    print("=" * 60)
+    print("="*60)
+
     direct_logger = EpisodeLogger(output_dir)
     direct_transcript, direct_summary = run_direct_episode(
-        config, pllm, evaluator, eval_set, direct_logger, client
+        config=config,
+        responder=responder,
+        evaluator=evaluator,
+        eval_set=eval_set,
+        logger=direct_logger,
+        client=client
     )
     direct_logger.save(suffix="_direct")
 
-    # Compare results
     comparison = {
         "bestofn": bestofn_summary,
         "direct": direct_summary,
@@ -243,17 +250,16 @@ def compare_policies(
         }
     }
 
-    print("\n" + "=" * 60)
+    print("\n" + "="*60)
     print("COMPARISON RESULTS")
-    print("=" * 60)
+    print("="*60)
     print(f"Best-of-N total reward: {bestofn_summary['total_reward']:.4f}")
-    print(f"Direct total reward: {direct_summary['total_reward']:.4f}")
-    print(f"Improvement: {comparison['improvement']['total_reward']:.4f}")
-    print(f"Success: {comparison['improvement']['total_reward'] > 0}")
-    print(f"\nBest-of-N final score: {bestofn_summary['final_score']:.4f}")
-    print(f"Direct final score: {direct_summary['final_score']:.4f}")
+    print(f"Direct total reward:  {direct_summary['total_reward']:.4f}")
+    print(f"Improvement:           {comparison['improvement']['total_reward']:.4f}")
+    print(f"Success:               {comparison['improvement']['total_reward'] > 0}")
 
     return comparison
+
 
 
 def setup_episode(config: EpisodeConfig, seed: int = None) -> EpisodeEvalSet:
@@ -310,24 +316,19 @@ def setup_episode(config: EpisodeConfig, seed: int = None) -> EpisodeEvalSet:
 
 
 def run_single_seed(
-    config,
-    seed: int,
-    output_dir: Path,
-    num_candidates: int = 5,
-    num_samples: int = 3
+    config, seed: int, output_dir: Path, num_candidates: int = 5, num_samples: int = 3
 ) -> dict:
-    """Run experiment for a single seed."""
+    """Run experiment for a single seed with a separate responder LLM."""
     print(f"\n{'='*60}")
     print(f"RUNNING SEED {seed}")
     print(f"{'='*60}")
 
-    # Setup episode
+    # Setup episode (items/pairs/labels via PLLM)
     eval_set = setup_episode(config.episode, seed)
 
     # Save episode data
     seed_dir = output_dir / f"seed_{seed}"
     seed_dir.mkdir(parents=True, exist_ok=True)
-
     episode_data = {
         "seed": seed,
         "items": eval_set.items,
@@ -336,21 +337,28 @@ def run_single_seed(
     }
     save_json(episode_data, seed_dir / "episode_data.json")
 
-    # Initialize PLLM and Evaluator for the episode
+    # Build evaluator client & EvaluatorD
     chat = TogetherChat(
         model=config.episode.model,
         max_tokens=config.episode.max_tokens,
         temperature=config.episode.temperature
     )
-    pllm = PLLM(chat)
-    pllm.initialize_persona(config.episode.persona, eval_set)
-
     evaluator = EvaluatorD(chat)
 
-    # Run comparison
+    # independent responder LLM
+    responder = ResponderLLM(
+        chat_client=TogetherChat(
+            model=config.episode.model,
+            max_tokens=64,
+            temperature=0.8               # higher temp for diversity
+        )
+    )
+    responder.initialize_persona(config.episode.persona)
+
+    # Compare policies using responder
     comparison = compare_policies(
         config=config.episode,
-        pllm=pllm,
+        responder=responder,
         evaluator=evaluator,
         eval_set=eval_set,
         output_dir=seed_dir,
@@ -359,10 +367,10 @@ def run_single_seed(
         client=chat
     )
 
-    # Save comparison results
+    # Save comparison
     save_json(comparison, seed_dir / "comparison.json")
-
     return comparison
+
 
 
 def main():

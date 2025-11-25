@@ -38,7 +38,7 @@ def test_model(model_path):
 
     model = AutoModelForCausalLM.from_pretrained(
         str(model_path),
-        dtype=dtype,
+        torch_dtype=dtype,
         local_files_only=True
     ).to(device)
 

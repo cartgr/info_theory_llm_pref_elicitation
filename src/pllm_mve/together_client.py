@@ -221,28 +221,20 @@ class TogetherChat:
             # Default to uniform on error
             return 0.5
 
-    def get_eval_probability_logprobs(
-        self,
-        answers: str,
-        option_a: str,
-        option_b: str
-    ) -> float:
+    def get_eval_probability_logprobs(self, answers: str, option_a: str, option_b: str) -> float:
         """Get evaluator probability using logprobs (more efficient and accurate).
-
-        This works by:
-        1. Ask model to choose between A and B
-        2. Get logprobs for the first generated token
-        3. Extract P(A) and P(B) from the top_logprobs
-        4. Calculate P(A > B) = P(A) / (P(A) + P(B))
+        Falls back gracefully if the Together API response lacks top_logprobs.
         """
         import math
+
+        def _clip(p: float) -> float:
+            return min(0.999, max(0.001, float(p)))
 
         system = (
             "You are a calibrated evaluator. Based on the participant's answers, "
             "determine if they prefer option A over option B. "
             "Respond with only a single letter: A or B."
         )
-
         user = (
             f"Transcript (participant answers only):\n{answers}\n\n"
             f"Option A: {option_a}\n"
@@ -255,61 +247,66 @@ class TogetherChat:
             {"role": "user", "content": user}
         ]
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            max_tokens=1,
-            temperature=0.0,
-            logprobs=5  # Get top 5 logprobs (API maximum)
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=1,
+                temperature=0.0,
+                logprobs=5
+            )
+        except Exception as e:
+            print(f"Error requesting logprobs: {e}")
+            return self.get_eval_probability(answers, option_a, option_b)
 
         if not response or not response.choices:
-            raise RuntimeError("No response from API")
+            return 0.5
 
         choice = response.choices[0]
-        if not choice.logprobs:
-            raise RuntimeError("No logprobs in response")
+        if not getattr(choice, "logprobs", None):
+            # Model/endpoint doesn't support logprobs
+            return self.get_eval_probability(answers, option_a, option_b)
 
-        # Extract logprobs for A and B
         logprob_a = None
         logprob_b = None
 
-        # Check if we have top_logprobs (contains dict of token -> logprob)
-        if hasattr(choice.logprobs, 'top_logprobs') and choice.logprobs.top_logprobs:
-            top_logprobs = choice.logprobs.top_logprobs[0]  # First token's top logprobs
+        # Extract first-token logprobs robustly
+        top0 = None
+        if hasattr(choice.logprobs, "top_logprobs") and choice.logprobs.top_logprobs:
+            top0 = choice.logprobs.top_logprobs[0]
 
-            # DEBUG: Print what tokens we got
-            print(f"    DEBUG: top_logprobs keys: {list(top_logprobs.keys())}")
+        # Normalize to list of (token, logprob) pairs
+        items = []
+        if isinstance(top0, dict):
+            items = list(top0.items())
+        elif isinstance(top0, list):
+            for entry in top0:
+                if isinstance(entry, dict):
+                    tok = entry.get("token", "")
+                    lp = entry.get("logprob")
+                    if tok and lp is not None:
+                        items.append((tok, lp))
 
-            # top_logprobs is a dict like {'A': -0.5, 'B': -1.2, ...}
-            for token, logprob in top_logprobs.items():
-                token_clean = token.strip().upper()
-                if token_clean == 'A':
-                    logprob_a = logprob
-                elif token_clean == 'B':
-                    logprob_b = logprob
+        for token, logprob in items:
+            t = (token or "").strip().upper()
+            if t == "A":
+                logprob_a = logprob
+            elif t == "B":
+                logprob_b = logprob
 
-        # If one of A or B is not in top 5, assign it a very low probability
+        # Handle missing values
         if logprob_a is None and logprob_b is None:
-            # Neither found - shouldn't happen, but fall back to 0.5
-            print(f"    WARNING: Neither A nor B in top logprobs: {list(top_logprobs.keys())}")
-            return 0.5
-        elif logprob_a is None:
-            # A not in top 5, B is very confident
-            print(f"    INFO: 'A' not in top 5, assuming P(A>B) ≈ 0")
-            return 0.001
-        elif logprob_b is None:
-            # B not in top 5, A is very confident
-            print(f"    INFO: 'B' not in top 5, assuming P(A>B) ≈ 1")
-            return 0.999
+            return self.get_eval_probability(answers, option_a, option_b)
+        if logprob_a is None:
+            return _clip(0.001)
+        if logprob_b is None:
+            return _clip(0.999)
 
-        # P(A) = exp(logprob_A) / (exp(logprob_A) + exp(logprob_B))
         prob_a = math.exp(logprob_a)
         prob_b = math.exp(logprob_b)
-        p_a_over_b = prob_a / (prob_a + prob_b)
+        p_a_over_b = prob_a / (prob_a + prob_b + 1e-12)
+        return _clip(p_a_over_b)
 
-        # Clip to avoid log(0) issues
-        return min(0.999, max(0.001, p_a_over_b))
 
     def answer_question(
         self,
