@@ -29,151 +29,165 @@ from pllm_mve.responder import ResponderLLM
 
 def run_bestofn_episode(
     config: EpisodeConfig,
-    responder: ResponderLLM,
-    evaluator: EvaluatorD,
-    eval_set: EpisodeEvalSet,
+    persona_pllm: PLLM,
+    responder: ResponderLLM,          # proposal model P
+    evaluator: EvaluatorD,            # judge
+    eval_set_E: EpisodeEvalSet,       # only E used for rewards
     logger: EpisodeLogger,
     num_candidates: int = 5,
-    num_samples: int = 3
+    num_samples: int = 3,
 ) -> Tuple[Transcript, Dict]:
     """
-    Run a best-of-n episode.
+    Best-of-N episode:
 
-    For each turn:
-    - Generate num_candidates questions
-    - For each, sample num_samples hypothetical answers and compute expected gain
-    - Select question with highest expected gain
-    - Actually ask it and get real answer
-
-    Args:
-        config: Episode configuration
-        pllm: PLLM to answer questions
-        evaluator: Evaluator to score transcripts
-        eval_set: Fixed evaluation set
-        logger: Episode logger
-        num_candidates: Number of candidate questions (k)
-        num_samples: Number of samples per candidate (t)
-
-    Returns:
-        (final_transcript, summary_stats)
+      - Rewards/log-scores are computed ONLY on E.
+      - Hypothetical answers for scoring questions come from ResponderLLM (P).
+      - Real transcript answers come from Persona LLM (PLLM).
     """
+
     transcript = Transcript()
 
     print(f"Starting best-of-n episode with {config.num_turns} turns...")
     print(f" Candidates per turn (k): {num_candidates}")
     print(f" Samples per candidate (t): {num_samples}")
 
-    print("\n" + "="*70)
-    print("INITIAL BASELINE (no conversation yet)")
-    print("="*70)
+    print("\n" + "=" * 70)
+    print("INITIAL BASELINE ON E (no conversation yet)")
+    print("=" * 70)
 
-    f_prev = log_score(eval_set, transcript, evaluator, verbose=True)
+    # Use E for scoring
+    f_prev = log_score(eval_set_E, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Best-of-n turns"):
-
-        # Step 1: Generate candidate questions
+        # 1) Generate candidate questions
         questions = generate_candidate_questions(
             domain=config.domain,
-            items=eval_set.items,
+            items=eval_set_E.items,
             transcript=transcript,
             pool_size=num_candidates,
-            client=evaluator.chat
+            client=evaluator.chat,  # reuse same Together client
         )
 
-        # Step 2: Compute expected gain via responder sampling
         baseline_score = f_prev
         best_q = None
-        best_expected_gain = float("-inf")
+        best_gain_stat = float("-inf")
 
+        # 2) For each question, sample num_samples hypothetical answers from P
         for q in questions:
             gains = []
             for _ in range(num_samples):
-                a = responder.answer_question(q)
+                # Hypothetical answer from proposal model P (ResponderLLM)
+                a_sample = responder.answer_question(q)
+
+                # Trial transcript
                 trial = Transcript(turns=transcript.turns.copy())
-                trial.add_turn(q, a)
-                new_score = log_score(eval_set, trial, evaluator)
+                trial.add_turn(q, a_sample)
+
+                # Judge on E
+                new_score = log_score(eval_set_E, trial, evaluator, verbose=False)
                 gains.append(new_score - baseline_score)
 
-            expected_gain = float(np.max(gains)) if gains else 0.0
+            # Aggregate: max gain (as you already switched)
+            gain_stat = float(np.max(gains)) if gains else 0.0
 
-            print("\n" + "-"*60)
+            print("\n" + "-" * 60)
             print(f"Candidate: {q[:80]}...")
-            print(f"Gains: {[f'{g:.3f}' for g in gains]} "
-                f"→ Max = {expected_gain:.3f}")
+            print(f"Gains on E: {[f'{g:.3f}' for g in gains]} → Max = {gain_stat:.3f}")
 
-            if expected_gain > best_expected_gain:
-                best_expected_gain = expected_gain
+            if gain_stat > best_gain_stat:
+                best_gain_stat = gain_stat
                 best_q = q
 
+        # 3) Ask the best question to the Persona LLM for the *real* transcript
+        real_answer = persona_pllm.answer_question(best_q)
+        transcript.add_turn(best_q, real_answer)
 
-        # Step 3: Ask chosen question “for real”
-        actual_a = responder.answer_question(best_q)
-        transcript.add_turn(best_q, actual_a)
+        print("\n" + "=" * 70)
+        print(f" AFTER TURN {turn} - Updated predictions on E:")
+        print("=" * 70)
 
-        print("\n" + "="*70)
-        print(f" AFTER TURN {turn} - Updated predictions:")
-        print("="*70)
-
-        f_new = log_score(eval_set, transcript, evaluator, verbose=True)
+        f_new = log_score(eval_set_E, transcript, evaluator, verbose=True)
         reward = f_new - f_prev
 
         logger.log_turn(
             turn=turn,
             question=best_q,
-            answer=actual_a,
+            answer=real_answer,
             score=f_new,
             reward=reward,
-            expected_gain=best_expected_gain,
-            policy="bestofn"
+            expected_gain=best_gain_stat,
+            policy="bestofn",
         )
 
-        print(f" Turn {turn}: score={f_new:.4f}, "
-              f"reward={reward:.4f}, "
-              f"expected_gain={best_expected_gain:.4f}")
+        print(
+            f" Turn {turn}: score_E={f_new:.4f}, "
+            f"reward={reward:.4f}, "
+            f"max_gain={best_gain_stat:.4f}"
+        )
 
         f_prev = f_new
 
-    return transcript, logger.get_summary()
+    summary = logger.get_summary()
+    return transcript, summary
+
 
 
 
 def run_direct_episode(
     config: EpisodeConfig,
-    responder: ResponderLLM,
+    persona_pllm: PLLM,
     evaluator: EvaluatorD,
-    eval_set: EpisodeEvalSet,
+    eval_set_E: EpisodeEvalSet,
     logger: EpisodeLogger,
-    client: TogetherChat
+    client: TogetherChat,
+    num_candidates: int = 5,
 ) -> Tuple[Transcript, Dict]:
+    """
+    Direct baseline episode.
+    """
 
     transcript = Transcript()
 
     print(f"Starting direct baseline episode with {config.num_turns} turns...")
+    print(f" Direct baseline num_candidates per turn: {num_candidates}")
 
-    print("\n" + "="*70)
-    print("INITIAL BASELINE (no conversation yet)")
-    print("="*70)
+    print("\n" + "=" * 70)
+    print("INITIAL BASELINE ON E (no conversation yet)")
+    print("=" * 70)
 
-    f_prev = log_score(eval_set, transcript, evaluator, verbose=True)
+    # Score on E with empty transcript
+    f_prev = log_score(eval_set_E, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Direct turns"):
-
-        # Generate one question directly, answer with responder
-        question, answer = select_direct_question(
+        # 1) Generate same candidate pool as Best-of-N
+        questions = generate_candidate_questions(
             domain=config.domain,
-            items=eval_set.items,
+            items=eval_set_E.items,
             transcript=transcript,
-            responder=responder,
-            client=client
+            pool_size=num_candidates,
+            client=client,   # same TogetherChat used elsewhere
         )
 
+        if not questions:
+            print("WARNING: generate_candidate_questions returned no questions; skipping turn.")
+            break
+
+        # 2) Pick one at random (no selection logic)
+        question = random.choice(questions)
+        print("\n" + "-" * 60)
+        print(f"Direct baseline picked question (random from {num_candidates}):")
+        print(question)
+
+        # 3) Ask Persona PLLM for the real answer
+        answer = persona_pllm.answer_question(question)
         transcript.add_turn(question, answer)
 
-        print("\n" + "="*70)
-        print(f" AFTER TURN {turn} - Updated predictions:")
-        print("="*70)
+        print("\n" + "=" * 70)
+        print(f" AFTER TURN {turn} - Updated predictions on E:")
+        print("=" * 70)
 
-        f_new = log_score(eval_set, transcript, evaluator, verbose=True)
+        # 4) Recompute score on E
+        f_new = log_score(eval_set_E, transcript, evaluator, verbose=True)
         reward = f_new - f_prev
 
         logger.log_turn(
@@ -182,192 +196,251 @@ def run_direct_episode(
             answer=answer,
             score=f_new,
             reward=reward,
-            policy="direct"
+            policy="direct",
         )
 
-        print(f" Turn {turn}: score={f_new:.4f}, reward={reward:.4f}")
+        print(f" Turn {turn}: score_E={f_new:.4f}, reward={reward:.4f}")
 
         f_prev = f_new
 
-    return transcript, logger.get_summary()
+    summary = logger.get_summary()
+    return transcript, summary
+
+
 
 
 def compare_policies(
     config: EpisodeConfig,
+    persona_pllm: PLLM,
     responder: ResponderLLM,
     evaluator: EvaluatorD,
-    eval_set: EpisodeEvalSet,
+    eval_set_E: EpisodeEvalSet,
+    eval_set_T: EpisodeEvalSet,
     output_dir: Path,
     num_candidates: int = 5,
     num_samples: int = 3,
-    client: TogetherChat = None
+    client: TogetherChat = None,
 ) -> Dict:
+    """
+    Run Best-of-N and Direct baseline:
+
+      - Both use SAME question generator (generate_candidate_questions).
+      - Best-of-N scores the candidates using hypothetical answers and the judge on E.
+      - Direct picks one candidate at random (no scoring).
+      - Both use Persona PLLM for real answers.
+      - Final performance is evaluated on T.
+    """
 
     if client is None:
-        client = TogetherChat()
+        client = TogetherChat(
+            model=config.model,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+        )
 
-    print("\n" + "="*60)
+    # ------------------- Best-of-N -------------------
+    print("\n" + "=" * 60)
     print("RUNNING BEST-OF-N POLICY")
-    print("="*60)
+    print("=" * 60)
 
     bestofn_logger = EpisodeLogger(output_dir)
     bestofn_transcript, bestofn_summary = run_bestofn_episode(
         config=config,
+        persona_pllm=persona_pllm,
         responder=responder,
         evaluator=evaluator,
-        eval_set=eval_set,
+        eval_set_E=eval_set_E,
         logger=bestofn_logger,
         num_candidates=num_candidates,
-        num_samples=num_samples
+        num_samples=num_samples,
     )
     bestofn_logger.save(suffix="_bestofn")
 
-    print("\n" + "="*60)
+    # ------------------- Direct baseline -------------------
+    print("\n" + "=" * 60)
     print("RUNNING DIRECT BASELINE")
-    print("="*60)
+    print("=" * 60)
 
     direct_logger = EpisodeLogger(output_dir)
     direct_transcript, direct_summary = run_direct_episode(
         config=config,
-        responder=responder,
+        persona_pllm=persona_pllm,
         evaluator=evaluator,
-        eval_set=eval_set,
+        eval_set_E=eval_set_E,
         logger=direct_logger,
-        client=client
+        client=client,
+        num_candidates=num_candidates,  # match Best-of-N
     )
     direct_logger.save(suffix="_direct")
 
+    # ------------------- Final evaluation on T -------------------
+    bestofn_final_T = log_score(eval_set_T, bestofn_transcript, evaluator, verbose=False)
+    direct_final_T = log_score(eval_set_T, direct_transcript, evaluator, verbose=False)
+
+    # Maintain backward-compatible keys so aggregate code still works
+    total_reward_diff = bestofn_summary["total_reward"] - direct_summary["total_reward"]
+    final_score_diff = bestofn_final_T - direct_final_T
+
     comparison = {
-        "bestofn": bestofn_summary,
-        "direct": direct_summary,
+        "bestofn": {
+            **bestofn_summary,
+            "final_logscore_T": bestofn_final_T,
+        },
+        "direct": {
+            **direct_summary,
+            "final_logscore_T": direct_final_T,
+        },
         "improvement": {
-            "total_reward": bestofn_summary["total_reward"] - direct_summary["total_reward"],
-            "final_score": bestofn_summary["final_score"] - direct_summary["final_score"]
+            # old keys expected by aggregate code:
+            "total_reward": total_reward_diff,
+            "final_score": final_score_diff,
+            # more explicit keys (optional, for your own inspection):
+            "total_reward_E": total_reward_diff,
+            "final_logscore_T": final_score_diff,
         },
         "config": {
             "num_candidates": num_candidates,
-            "num_samples": num_samples
-        }
+            "num_samples": num_samples,
+        },
     }
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("COMPARISON RESULTS")
-    print("="*60)
-    print(f"Best-of-N total reward: {bestofn_summary['total_reward']:.4f}")
-    print(f"Direct total reward:  {direct_summary['total_reward']:.4f}")
-    print(f"Improvement:           {comparison['improvement']['total_reward']:.4f}")
-    print(f"Success:               {comparison['improvement']['total_reward'] > 0}")
+    print("=" * 60)
+    print(f"Best-of-N total reward on E: {bestofn_summary['total_reward']:.4f}")
+    print(f"Direct   total reward on E: {direct_summary['total_reward']:.4f}")
+    print(f"Improvement (reward E):    {total_reward_diff:.4f}")
+    print(f"\nBest-of-N final logscore on T: {bestofn_final_T:.4f}")
+    print(f"Direct   final logscore on T: {direct_final_T:.4f}")
+    print(f"Improvement (logscore T):      {final_score_diff:.4f}")
 
     return comparison
 
 
 
-def setup_episode(config: EpisodeConfig, seed: int = None) -> EpisodeEvalSet:
-    """Setup an episode with items and pairs."""
+def setup_episode(config: EpisodeConfig, seed: int = None) -> Tuple[EpisodeEvalSet, EpisodeEvalSet]:
+    """
+    Setup an episode with:
+      - items
+      - E: a subset of pairs for reward computation
+      - T: the full set of pairs for final evaluation
+
+    Returns:
+        eval_set_E, eval_set_T
+    """
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
     print(f"\nSetting up episode (seed={seed})...")
 
-    # Initialize chat client
-    chat = TogetherChat(
+    # 1) Build items using a temporary Together client
+    temp_chat = TogetherChat(
         model=config.model,
         max_tokens=config.max_tokens,
-        temperature=config.temperature
+        temperature=config.temperature,
     )
 
-    # Generate items for the domain
     items = generate_items_for_domain(
         domain=config.domain,
         persona=config.persona,
         num_items=config.num_items,
-        chat_client=chat
+        chat_client=temp_chat,
     )
+
     print(f"Generated {len(items)} items for domain '{config.domain}'")
 
-    # Generate pairs for comparison
-    pairs = generate_item_pairs(
-        num_items=config.num_items,
-        num_pairs=config.num_pairs,
-        seed=seed
-    )
-    print(f"Generated {len(pairs)} pairs for comparison")
+    # 2) Build full pair set T
+    all_pairs = [(i, j) for i in range(len(items)) for j in range(i + 1, len(items))]
 
-    # Create evaluation set
-    eval_set = EpisodeEvalSet(
-        items=items,
-        pairs=pairs,
-        labels={}
-    )
+    print(f"Full pair set T has {len(all_pairs)} pairs")
 
-    # Get labels from PLLM
-    print("Getting preference labels from PLLM...")
-    pllm = PLLM(chat)
-    pllm.initialize_persona(config.persona, eval_set)
+    # 3) Sample E ⊂ T for rewards
+    num_pairs_E = min(config.num_pairs, len(all_pairs))
+    pairs_E = random.sample(all_pairs, num_pairs_E)
 
-    for i, pair in enumerate(tqdm(pairs, desc="Labeling pairs")):
-        label = pllm.label_eval_question(pair[0], pair[1])
-        eval_set.labels[pair] = label
+    print(f"Eval subset E has {len(pairs_E)} pairs")
 
-    print(f"Labeled all {len(pairs)} pairs")
+    eval_set_E = EpisodeEvalSet(items=items, pairs=pairs_E, labels={})
+    eval_set_T = EpisodeEvalSet(items=items, pairs=all_pairs, labels={})
 
-    return eval_set
+    return eval_set_E, eval_set_T
+
 
 
 def run_single_seed(
-    config, seed: int, output_dir: Path, num_candidates: int = 5, num_samples: int = 3
+    config,
+    seed: int,
+    output_dir: Path,
+    num_candidates: int = 5,
+    num_samples: int = 3,
 ) -> dict:
-    """Run experiment for a single seed with a separate responder LLM."""
-    print(f"\n{'='*60}")
+    """Run Best-of-N vs Direct for a single seed."""
+
+    print(f"\n{'=' * 60}")
     print(f"RUNNING SEED {seed}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
-    # Setup episode (items/pairs/labels via PLLM)
-    eval_set = setup_episode(config.episode, seed)
+    # 1) Setup episode -> E and T
+    eval_set_E, eval_set_T = setup_episode(config.episode, seed)
 
-    # Save episode data
+    # 2) Save episode metadata
     seed_dir = output_dir / f"seed_{seed}"
     seed_dir.mkdir(parents=True, exist_ok=True)
+
     episode_data = {
         "seed": seed,
-        "items": eval_set.items,
-        "pairs": eval_set.pairs,
-        "labels": {str(k): v for k, v in eval_set.labels.items()}
+        "items": eval_set_T.items,
+        "pairs_E": eval_set_E.pairs,
+        "pairs_T": eval_set_T.pairs,
     }
     save_json(episode_data, seed_dir / "episode_data.json")
 
-    # Build evaluator client & EvaluatorD
-    chat = TogetherChat(
+    # 3) Persona PLLM + labels
+    chat_persona = TogetherChat(
         model=config.episode.model,
         max_tokens=config.episode.max_tokens,
-        temperature=config.episode.temperature
+        temperature=config.episode.temperature,
     )
-    evaluator = EvaluatorD(chat)
+    persona_pllm = PLLM(chat_persona)
+    persona_pllm.initialize_persona(config.episode.persona, eval_set_T)
 
-    # independent responder LLM
-    responder = ResponderLLM(
-        chat_client=TogetherChat(
-            model=config.episode.model,
-            max_tokens=64,
-            temperature=0.8               # higher temp for diversity
-        )
+    print("Labeling E and T with Persona PLLM...")
+
+    for pair in eval_set_E.pairs:
+        label = persona_pllm.label_eval_question(pair[0], pair[1])
+        eval_set_E.labels[pair] = label
+
+    for pair in eval_set_T.pairs:
+        label = persona_pllm.label_eval_question(pair[0], pair[1])
+        eval_set_T.labels[pair] = label
+
+    # 4) Judge (EvaluatorD)
+    evaluator = EvaluatorD(chat_persona)
+
+    # 5) ResponderLLM (proposal model P) 
+    chat_responder = TogetherChat(
+        model=config.episode.model,
+        max_tokens=config.episode.max_tokens,
+        temperature=config.episode.temperature,
     )
+    responder = ResponderLLM(chat_responder)
     responder.initialize_persona(config.episode.persona)
 
-    # Compare policies using responder
+    # 6) Run comparison (Best-of-N vs Direct)
     comparison = compare_policies(
         config=config.episode,
+        persona_pllm=persona_pllm,
         responder=responder,
         evaluator=evaluator,
-        eval_set=eval_set,
+        eval_set_E=eval_set_E,
+        eval_set_T=eval_set_T,
         output_dir=seed_dir,
         num_candidates=num_candidates,
         num_samples=num_samples,
-        client=chat
+        client=chat_persona,  # also used to generate questions
     )
 
-    # Save comparison
     save_json(comparison, seed_dir / "comparison.json")
     return comparison
 
