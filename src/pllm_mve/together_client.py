@@ -129,7 +129,8 @@ class TogetherChat:
             system=system,
             user=user,
             response_format=response_format,
-            max_tokens=50
+            max_tokens=50,
+            temperature=0  # Deterministic for consistent labeling
         )
 
         try:
@@ -165,22 +166,36 @@ class TogetherChat:
         self,
         answers: str,
         option_a: str,
-        option_b: str
+        option_b: str,
+        include_questions: bool = False
     ) -> float:
         """Get evaluator probability P(A > B | transcript)."""
-        system = (
-            "You are a calibrated evaluator. You will be given a set of the participant's "
-            "previous answers (no questions). From these, infer the probability the persona "
-            "prefers option A over option B. Always respond with valid JSON."
-        )
-
-        user = (
-            f"Transcript (participant answers only):\n"
-            f"{answers}\n\n"
-            f"Option A: {option_a}\n"
-            f"Option B: {option_b}\n\n"
-            f'Return the probability P(A>B | transcript) as JSON: {{"probability": 0.X}}'
-        )
+        if include_questions:
+            system = (
+                "You are a calibrated evaluator. You will be given a conversation transcript "
+                "(questions and answers). From these, infer the probability the participant "
+                "prefers option A over option B. Always respond with valid JSON."
+            )
+            user = (
+                f"Conversation transcript:\n"
+                f"{answers}\n\n"
+                f"Option A: {option_a}\n"
+                f"Option B: {option_b}\n\n"
+                f'Return the probability P(A>B | transcript) as JSON: {{"probability": 0.X}}'
+            )
+        else:
+            system = (
+                "You are a calibrated evaluator. You will be given a set of the participant's "
+                "previous answers (no questions). From these, infer the probability the persona "
+                "prefers option A over option B. Always respond with valid JSON."
+            )
+            user = (
+                f"Transcript (participant answers only):\n"
+                f"{answers}\n\n"
+                f"Option A: {option_a}\n"
+                f"Option B: {option_b}\n\n"
+                f'Return the probability P(A>B | transcript) as JSON: {{"probability": 0.X}}'
+            )
 
         # Use simple json_object mode
         response_format = {"type": "json_object"}
@@ -189,8 +204,20 @@ class TogetherChat:
             system=system,
             user=user,
             response_format=response_format,
-            max_tokens=50
+            max_tokens=50,
+            temperature=0  # Deterministic for consistent evaluation
         )
+
+        # Debug: print first call to see what's happening
+        if not hasattr(self, '_eval_debug_printed'):
+            self._eval_debug_printed = True
+            print("\n" + "="*60)
+            print("DEBUG: First eval probability call")
+            print("="*60)
+            print(f"SYSTEM:\n{system}")
+            print(f"\nUSER:\n{user}")
+            print(f"\nRESPONSE:\n{response}")
+            print("="*60 + "\n")
 
         try:
             result = json.loads(response)
@@ -221,7 +248,13 @@ class TogetherChat:
             # Default to uniform on error
             return 0.5
 
-    def get_eval_probability_logprobs(self, answers: str, option_a: str, option_b: str) -> float:
+    def get_eval_probability_logprobs(
+        self,
+        answers: str,
+        option_a: str,
+        option_b: str,
+        include_questions: bool = False
+    ) -> float:
         """Get evaluator probability using logprobs (more efficient and accurate).
         Falls back gracefully if the Together API response lacks top_logprobs.
         """
@@ -230,17 +263,30 @@ class TogetherChat:
         def _clip(p: float) -> float:
             return min(0.999, max(0.001, float(p)))
 
-        system = (
-            "You are a calibrated evaluator. Based on the participant's answers, "
-            "determine if they prefer option A over option B. "
-            "Respond with only a single letter: A or B."
-        )
-        user = (
-            f"Transcript (participant answers only):\n{answers}\n\n"
-            f"Option A: {option_a}\n"
-            f"Option B: {option_b}\n\n"
-            f"Which option does the participant prefer? Answer with only 'A' or 'B'."
-        )
+        if include_questions:
+            system = (
+                "You are a calibrated evaluator. Based on the conversation transcript, "
+                "determine if the participant prefers option A over option B. "
+                "Respond with only a single letter: A or B."
+            )
+            user = (
+                f"Conversation transcript:\n{answers}\n\n"
+                f"Option A: {option_a}\n"
+                f"Option B: {option_b}\n\n"
+                f"Which option does the participant prefer? Answer with only 'A' or 'B'."
+            )
+        else:
+            system = (
+                "You are a calibrated evaluator. Based on the participant's answers, "
+                "determine if they prefer option A over option B. "
+                "Respond with only a single letter: A or B."
+            )
+            user = (
+                f"Transcript (participant answers only):\n{answers}\n\n"
+                f"Option A: {option_a}\n"
+                f"Option B: {option_b}\n\n"
+                f"Which option does the participant prefer? Answer with only 'A' or 'B'."
+            )
 
         messages = [
             {"role": "system", "content": system},
@@ -329,8 +375,44 @@ class TogetherChat:
         response = self.chat(
             system=system,
             user=user,
-            temperature=0.7,  # Slightly higher for more natural answers
+            temperature=1.0,  # High temperature for diverse sampling
             max_tokens=50  # Reduced to enforce brevity (~20 words)
+        )
+
+        return response
+
+    def answer_question_generic(
+        self,
+        question: str,
+        domain: str = None
+    ) -> str:
+        """Get a generic user answer (no specific persona).
+
+        Used by ResponderLLM to generate diverse hypothetical answers
+        without biasing toward the true persona.
+        """
+        if domain:
+            system = (
+                f"You are a person being interviewed about {domain}. "
+                f"Answer naturally and conversationally as a typical person might."
+            )
+        else:
+            system = (
+                "You are a person being interviewed about your preferences. "
+                "Answer naturally and conversationally as a typical person might."
+            )
+
+        user = (
+            f"Question: {question}\n\n"
+            f"Answer in about 20 words. Be conversational and natural. "
+            f"Give a reasonable answer that a typical person might give."
+        )
+
+        response = self.chat(
+            system=system,
+            user=user,
+            temperature=0.8,  # Higher temperature for diversity
+            max_tokens=50
         )
 
         return response

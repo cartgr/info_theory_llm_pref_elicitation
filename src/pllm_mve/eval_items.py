@@ -87,34 +87,184 @@ def get_car_items() -> List[str]:
 
 
 def get_restaurant_items() -> List[str]:
-    """Get predefined restaurant items."""
+    """Get predefined restaurant items (expanded set)."""
     return [
-        "Thai vegetarian restaurant with spicy curries",
-        "Italian pizzeria with wood-fired oven",
-        "Indian street food with chaat and dosas",
-        "Mexican taqueria with veggie options",
-        "Mediterranean grill with falafel and hummus",
-        "Japanese ramen shop with vegetable broth",
-        "Ethiopian restaurant with injera and lentils",
-        "Vietnamese pho place with tofu options",
-        "Greek taverna with grilled vegetables",
-        "Chinese Sichuan restaurant with mapo tofu"
+        # Italian
+        "Upscale Italian trattoria, handmade pasta, $$$",
+        "Casual Neapolitan pizza, wood-fired, $$",
+        "Italian-American red sauce joint, family-style, $$",
+        "Modern Italian small plates, wine bar, $$$",
+        "Quick Italian deli, sandwiches and salads, $",
+
+        # Asian - Japanese
+        "Omakase sushi bar, 12-course, $$$$",
+        "Casual ramen shop, pork tonkotsu, $$",
+        "Japanese izakaya, small plates and sake, $$",
+        "Fast-casual poke bowl, build-your-own, $",
+        "Hibachi grill, tableside cooking, $$$",
+
+        # Asian - Chinese
+        "Dim sum palace, weekend carts, $$",
+        "Sichuan restaurant, very spicy, $$",
+        "Chinese-American takeout, General Tso's, $",
+        "Upscale Cantonese, Peking duck, $$$",
+        "Hand-pulled noodle shop, casual, $",
+
+        # Asian - Other
+        "Thai restaurant, curries and pad thai, $$",
+        "Vietnamese pho house, big bowls, $",
+        "Korean BBQ, tabletop grilling, $$$",
+        "Indian curry house, buffet lunch, $$",
+        "Filipino restaurant, adobo and lumpia, $$",
+
+        # Mexican/Latin
+        "Taqueria, street tacos, cash only, $",
+        "Upscale Mexican, mole and mezcal, $$$",
+        "Tex-Mex cantina, fajitas and margaritas, $$",
+        "Peruvian rotisserie chicken, casual, $$",
+        "Cuban cafe, sandwiches and coffee, $",
+
+        # American
+        "Classic steakhouse, dry-aged beef, $$$$",
+        "Craft burger joint, local beef, $$",
+        "Southern comfort food, fried chicken, $$",
+        "New American farm-to-table, seasonal menu, $$$",
+        "Classic diner, breakfast all day, $",
+        "BBQ smokehouse, brisket and ribs, $$",
+        "Seafood shack, lobster rolls, $$",
+
+        # European
+        "French bistro, steak frites, $$$",
+        "Spanish tapas bar, sangria, $$",
+        "Greek taverna, lamb and mezze, $$",
+        "German beer hall, schnitzel and pretzels, $$",
+        "British gastropub, fish and chips, $$",
+
+        # Middle Eastern/Mediterranean
+        "Lebanese restaurant, shawarma and mezze, $$",
+        "Falafel counter, fast-casual, $",
+        "Turkish kebab house, grilled meats, $$",
+        "Israeli hummus bar, fresh pita, $",
+        "Moroccan restaurant, tagine and couscous, $$$",
+
+        # Vegetarian/Health
+        "Vegan cafe, plant-based bowls, $$",
+        "Farm-to-table vegetarian, seasonal, $$$",
+        "Juice bar and salads, healthy fast-casual, $",
+        "Raw vegan restaurant, organic, $$$",
+
+        # Brunch/Breakfast
+        "Trendy brunch spot, avocado toast, $$",
+        "Classic breakfast diner, pancakes, $",
+        "French bakery cafe, croissants, $$",
+
+        # Fast Food/Quick
+        "Chipotle-style burrito chain, $",
+        "Fried chicken sandwich chain, $",
+        "Shake Shack-style burger, $$",
+        "Sweetgreen-style salad bar, $$",
+
+        # Special Occasion
+        "Chef's tasting menu, fine dining, $$$$",
+        "Rooftop restaurant, views and cocktails, $$$",
+        "Historic landmark restaurant, classic, $$$",
+        "Celebrity chef restaurant, trendy, $$$$",
     ]
 
 
 def get_movie_items() -> List[str]:
-    """Get predefined movie items."""
+    """Get predefined movie items (expanded set)."""
     return [
+        # Sci-fi
         "Blade Runner 2049 (sci-fi, dystopian)",
-        "Mad Max: Fury Road (action, post-apocalyptic)",
         "The Matrix (sci-fi, action)",
         "Inception (sci-fi, thriller)",
         "Interstellar (sci-fi, space)",
+        "Arrival (sci-fi, alien contact)",
+        "Dune (2021) (sci-fi, epic)",
+        "Ex Machina (sci-fi, AI)",
+        "Her (sci-fi, romance)",
+        "Annihilation (sci-fi, horror)",
+        "The Prestige (sci-fi, mystery)",
+
+        # Action/Thriller
+        "Mad Max: Fury Road (action, post-apocalyptic)",
         "John Wick (action, revenge)",
-        "Edge of Tomorrow (sci-fi, time loop)",
-        "The Martian (sci-fi, survival)",
         "Mission Impossible: Fallout (action, spy)",
-        "Arrival (sci-fi, alien contact)"
+        "Edge of Tomorrow (sci-fi, time loop)",
+        "The Dark Knight (action, superhero)",
+        "Heat (action, crime)",
+        "Sicario (thriller, crime)",
+        "No Country for Old Men (thriller, western)",
+        "Drive (action, noir)",
+        "The Raid (action, martial arts)",
+
+        # Drama
+        "The Shawshank Redemption (drama, prison)",
+        "Schindler's List (drama, historical)",
+        "Parasite (drama, thriller)",
+        "Whiplash (drama, music)",
+        "The Social Network (drama, biography)",
+        "There Will Be Blood (drama, period)",
+        "Manchester by the Sea (drama, family)",
+        "Moonlight (drama, coming-of-age)",
+        "12 Years a Slave (drama, historical)",
+        "The Godfather (drama, crime)",
+
+        # Comedy
+        "The Grand Budapest Hotel (comedy, quirky)",
+        "Superbad (comedy, teen)",
+        "The Big Lebowski (comedy, cult)",
+        "In Bruges (comedy, dark)",
+        "Hot Fuzz (comedy, action)",
+        "Step Brothers (comedy, absurd)",
+        "Bridesmaids (comedy, ensemble)",
+        "What We Do in the Shadows (comedy, horror)",
+        "The Nice Guys (comedy, noir)",
+        "Knives Out (comedy, mystery)",
+
+        # Horror
+        "Get Out (horror, social)",
+        "Hereditary (horror, supernatural)",
+        "The Witch (horror, period)",
+        "A Quiet Place (horror, survival)",
+        "Midsommar (horror, folk)",
+        "It Follows (horror, supernatural)",
+        "The Conjuring (horror, supernatural)",
+        "28 Days Later (horror, zombie)",
+        "Pan's Labyrinth (horror, fantasy)",
+        "The Babadook (horror, psychological)",
+
+        # Romance/Rom-com
+        "Eternal Sunshine of the Spotless Mind (romance, sci-fi)",
+        "Before Sunrise (romance, dialogue)",
+        "La La Land (romance, musical)",
+        "Pride and Prejudice (2005) (romance, period)",
+        "Crazy Rich Asians (romance, comedy)",
+        "The Notebook (romance, drama)",
+        "500 Days of Summer (romance, indie)",
+        "When Harry Met Sally (romance, comedy)",
+        "About Time (romance, sci-fi)",
+        "Silver Linings Playbook (romance, drama)",
+
+        # Animation
+        "Spider-Man: Into the Spider-Verse (animation, superhero)",
+        "Spirited Away (animation, fantasy)",
+        "The Incredibles (animation, superhero)",
+        "Coco (animation, family)",
+        "Wall-E (animation, sci-fi)",
+        "Ratatouille (animation, comedy)",
+        "Akira (animation, sci-fi)",
+        "Princess Mononoke (animation, fantasy)",
+        "Toy Story (animation, family)",
+        "How to Train Your Dragon (animation, adventure)",
+
+        # Documentary
+        "Free Solo (documentary, adventure)",
+        "Won't You Be My Neighbor? (documentary, biography)",
+        "The Act of Killing (documentary, crime)",
+        "Jiro Dreams of Sushi (documentary, food)",
+        "13th (documentary, social)",
     ]
 
 
@@ -124,14 +274,18 @@ def generate_items_for_domain(
     num_items: int,
     chat_client: TogetherChat
 ) -> List[str]:
-    """Generate items for a specific domain using PLLM."""
+    """Generate items for a specific domain using PLLM.
+
+    Items are randomly sampled from the predefined pool (using the current
+    random state, so set random.seed() before calling for reproducibility).
+    """
     # Use predefined items for consistency in MVE
     if domain == "cars":
-        items = get_car_items()
+        pool = get_car_items()
     elif domain == "restaurants":
-        items = get_restaurant_items()
+        pool = get_restaurant_items()
     elif domain == "movies":
-        items = get_movie_items()
+        pool = get_movie_items()
     else:
         # Generate items dynamically for other domains
         system = f"You are helping generate items for preference learning experiments."
@@ -141,15 +295,18 @@ def generate_items_for_domain(
             f"Return a simple list, one item per line. Be specific and detailed."
         )
         response = chat_client.chat(system=system, user=user, max_tokens=512)
-        items = [line.strip() for line in response.strip().split('\n') if line.strip()]
-        items = [item.lstrip('- •123456789.') for item in items]  # Clean up list formatting
-        items = items[:num_items]
+        pool = [line.strip() for line in response.strip().split('\n') if line.strip()]
+        pool = [item.lstrip('- •123456789.') for item in pool]  # Clean up list formatting
 
-    # Ensure we have exactly num_items
+    # Randomly sample num_items from the pool
+    if len(pool) <= num_items:
+        items = pool
+    else:
+        items = random.sample(pool, num_items)
+
+    # Ensure we have exactly num_items (fallback for small pools)
     if len(items) < num_items:
         items.extend([f"{domain} item {i}" for i in range(len(items), num_items)])
-    elif len(items) > num_items:
-        items = items[:num_items]
 
     return items
 

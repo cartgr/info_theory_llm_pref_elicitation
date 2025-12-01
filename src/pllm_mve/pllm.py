@@ -1,6 +1,6 @@
 """Participant LLM (PLLM) implementation."""
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from .types import EpisodeEvalSet
 from .together_client import TogetherChat
 
@@ -54,6 +54,24 @@ class PLLM:
             persona=self._persona,
             question=question
         )
+
+    def sample_answers(self, question: str, num_samples: int = 3) -> List[str]:
+        """Sample multiple answers to a question as the persona.
+
+        For PLLM, we call answer_question multiple times since each call
+        may produce slightly different answers due to temperature.
+        """
+        if not self._persona:
+            raise RuntimeError("PLLM not initialized with persona")
+
+        answers = []
+        for _ in range(num_samples):
+            answer = self.chat.answer_question(
+                persona=self._persona,
+                question=question
+            )
+            answers.append(answer)
+        return answers
 
     def get_all_labels(self) -> Dict[tuple, int]:
         """Get labels for all pairs in the evaluation set."""

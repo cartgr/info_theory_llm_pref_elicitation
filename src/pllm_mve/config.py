@@ -35,7 +35,12 @@ class ExperimentConfig:
 
 
 def load_config(config_path: Optional[Path] = None) -> ExperimentConfig:
-    """Load configuration from YAML file or use defaults."""
+    """Load configuration from YAML file or use defaults.
+
+    Environment variable overrides (for ablation experiments):
+    - ABLATION_NUM_PAIRS: Override episode.num_pairs
+    - ABLATION_NUM_TURNS: Override episode.num_turns
+    """
     if config_path and config_path.exists():
         with open(config_path, 'r') as f:
             config_dict = yaml.safe_load(f)
@@ -43,6 +48,13 @@ def load_config(config_path: Optional[Path] = None) -> ExperimentConfig:
         # Handle nested episode config
         if 'episode' in config_dict:
             episode_dict = config_dict.pop('episode')
+
+            # Apply environment variable overrides for ablation experiments
+            if os.environ.get("ABLATION_NUM_PAIRS"):
+                episode_dict["num_pairs"] = int(os.environ["ABLATION_NUM_PAIRS"])
+            if os.environ.get("ABLATION_NUM_TURNS"):
+                episode_dict["num_turns"] = int(os.environ["ABLATION_NUM_TURNS"])
+
             episode_config = EpisodeConfig(**episode_dict)
         else:
             episode_config = None

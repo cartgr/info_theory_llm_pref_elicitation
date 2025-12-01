@@ -1,0 +1,47 @@
+name: mve_cars
+output_dir: experiments/outputs/runs/cars
+num_seeds: 1
+question_pool_size: 10
+
+episode:
+  persona: |
+    Marcus, a 34-year-old software engineer living in Austin, Texas. He commutes
+    35 minutes each way on highways and city streets. Married with a 2-year-old
+    daughter, so car seat compatibility and safety ratings are non-negotiable.
+
+    Budget is firm at $38,000 max - he's been saving for two years and won't
+    finance more than that. Previously owned a 2015 Honda Accord that lasted
+    180,000 miles, which shaped his trust in Japanese reliability.
+
+    Priorities in order: safety ratings (must be 5-star NHTSA), reliability
+    (wants to keep the car 10+ years), fuel efficiency (targets 30+ mpg combined),
+    then comfort and tech features.
+
+    Dislikes: overly aggressive styling, massive infotainment screens he finds
+    distracting, anything that feels "cheap" inside. Test drove a Nissan recently
+    and hated the CVT transmission feel.
+
+    Considering: Would go electric if charging was more convenient in his apartment
+    complex, but currently leaning toward hybrid or efficient gas. Wants Apple
+    CarPlay. Likes the look of wagons and hatchbacks but wife prefers SUV styling.
+  domain: cars
+  num_items: 15
+  num_pairs: 25
+  num_turns: 2
+  temperature: 0.1
+  max_tokens: 256
+
+  # Default model (used if role-specific not set)
+  model: meta-llama/Llama-3.3-70B-Instruct-Turbo
+
+  # Role-specific models (optional - uncomment to use different models)
+  # Requirements:
+  #   - model_pllm: needs JSON mode support (for A/B labeling)
+  #   - model_evaluator: needs JSON mode OR logprobs support
+  #   - model_responder: no special requirements
+  #   - model_question_gen: no special requirements
+  #
+  # model_pllm: mistralai/Mixtral-8x7B-Instruct-v0.1
+  # model_evaluator: mistralai/Mixtral-8x7B-Instruct-v0.1
+  # model_responder: mistralai/Mistral-7B-Instruct-v0.2
+  # model_question_gen: mistralai/Mistral-7B-Instruct-v0.2

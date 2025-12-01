@@ -1,0 +1,24 @@
+name: mve_movies
+output_dir: experiments/outputs/runs/movies
+num_seeds: 1
+question_pool_size: 10
+
+episode:
+  persona: |
+    Jake, 32, software developer. Loves sci-fi and action movies.
+    Favorite directors: Christopher Nolan, Denis Villeneuve.
+    Favorites: Inception, Blade Runner 2049, The Dark Knight, Interstellar.
+
+    Likes: mind-bending plots, practical effects, great soundtracks.
+    Dislikes: rom-coms, slow dramas, horror movies (gets too scared).
+
+    Watching context: usually watches alone on weeknights to unwind.
+  domain: movies
+  num_items: 15
+  num_pairs: 25
+  num_turns: 2
+  temperature: 0.1
+  max_tokens: 256
+
+  # Default model (used if role-specific not set)
+  model: meta-llama/Llama-3.3-70B-Instruct-Turbo

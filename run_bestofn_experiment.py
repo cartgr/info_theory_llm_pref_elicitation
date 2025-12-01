@@ -59,10 +59,11 @@ def run_bestofn_episode(
     f_prev = log_score(eval_set_E, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Best-of-n turns"):
-        # 1) Generate candidate questions
+        # 1) Generate candidate questions (only show items that appear in E's pairs)
+        items_in_E = eval_set_E.get_items_in_pairs()
         questions = generate_candidate_questions(
             domain=config.domain,
-            items=eval_set_E.items,
+            items=items_in_E,
             transcript=transcript,
             pool_size=num_candidates,
             client=evaluator.chat,  # reuse same Together client
@@ -72,13 +73,13 @@ def run_bestofn_episode(
         best_q = None
         best_gain_stat = float("-inf")
 
-        # 2) For each question, sample num_samples hypothetical answers from P
+        # 2) For each question, sample num_samples hypothetical answers from P (batched)
         for q in questions:
-            gains = []
-            for _ in range(num_samples):
-                # Hypothetical answer from proposal model P (ResponderLLM)
-                a_sample = responder.answer_question(q)
+            # Get all samples in ONE API call
+            sampled_answers = responder.sample_answers(q, num_samples=num_samples)
 
+            gains = []
+            for a_sample in sampled_answers:
                 # Trial transcript
                 trial = Transcript(turns=transcript.turns.copy())
                 trial.add_turn(q, a_sample)
@@ -92,6 +93,7 @@ def run_bestofn_episode(
 
             print("\n" + "-" * 60)
             print(f"Candidate: {q[:80]}...")
+            print(f"Sampled answers: {[a[:40] + '...' for a in sampled_answers]}")
             print(f"Gains on E: {[f'{g:.3f}' for g in gains]} → Max = {gain_stat:.3f}")
 
             if gain_stat > best_gain_stat:
@@ -159,10 +161,11 @@ def run_direct_episode(
     f_prev = log_score(eval_set_E, transcript, evaluator, verbose=True)
 
     for turn in tqdm(range(config.num_turns), desc="Direct turns"):
-        # 1) Generate same candidate pool as Best-of-N
+        # 1) Generate same candidate pool as Best-of-N (only items in E's pairs)
+        items_in_E = eval_set_E.get_items_in_pairs()
         questions = generate_candidate_questions(
             domain=config.domain,
-            items=eval_set_E.items,
+            items=items_in_E,
             transcript=transcript,
             pool_size=num_candidates,
             client=client,   # same TogetherChat used elsewhere
@@ -374,6 +377,8 @@ def run_single_seed(
     output_dir: Path,
     num_candidates: int = 5,
     num_samples: int = 3,
+    use_logprobs: bool = False,
+    include_questions: bool = False,
 ) -> dict:
     """Run Best-of-N vs Direct for a single seed."""
 
@@ -397,8 +402,11 @@ def run_single_seed(
     save_json(episode_data, seed_dir / "episode_data.json")
 
     # 3) Persona PLLM + labels
+    # PLLM needs JSON mode for labeling (A/B choice)
+    pllm_model = config.episode.model_pllm or config.episode.model
+    print(f"PLLM model: {pllm_model}")
     chat_persona = TogetherChat(
-        model=config.episode.model,
+        model=pllm_model,
         max_tokens=config.episode.max_tokens,
         temperature=config.episode.temperature,
     )
@@ -416,18 +424,42 @@ def run_single_seed(
         eval_set_T.labels[pair] = label
 
     # 4) Judge (EvaluatorD)
-    evaluator = EvaluatorD(chat_persona)
-
-    # 5) ResponderLLM (proposal model P) 
-    chat_responder = TogetherChat(
-        model=config.episode.model,
+    # Evaluator needs JSON mode (text prob) OR logprobs support
+    evaluator_model = config.episode.model_evaluator or config.episode.model
+    print(f"Evaluator model: {evaluator_model}")
+    chat_evaluator = TogetherChat(
+        model=evaluator_model,
         max_tokens=config.episode.max_tokens,
         temperature=config.episode.temperature,
     )
-    responder = ResponderLLM(chat_responder)
-    responder.initialize_persona(config.episode.persona)
+    evaluator = EvaluatorD(
+        chat_evaluator,
+        include_questions=include_questions,
+        use_logprobs=use_logprobs
+    )
 
-    # 6) Run comparison (Best-of-N vs Direct)
+    # 5) ResponderLLM (proposal model P) - NO PERSONA to avoid overfitting
+    # Responder has no special requirements - any LLM works
+    responder_model = config.episode.model_responder or config.episode.model
+    print(f"Responder model: {responder_model}")
+    chat_responder = TogetherChat(
+        model=responder_model,
+        max_tokens=config.episode.max_tokens,
+        temperature=0.8,  # Higher temp for diversity
+    )
+    responder = ResponderLLM(chat_responder, use_persona=False)
+    responder.initialize(domain=config.episode.domain)
+
+    # 6) Question generator uses model from compare_policies
+    qgen_model = config.episode.model_question_gen or config.episode.model
+    print(f"Question generator model: {qgen_model}")
+    chat_qgen = TogetherChat(
+        model=qgen_model,
+        max_tokens=config.episode.max_tokens,
+        temperature=0.8,  # Higher temp for diversity
+    )
+
+    # 7) Run comparison (Best-of-N vs Direct)
     comparison = compare_policies(
         config=config.episode,
         persona_pllm=persona_pllm,
@@ -438,7 +470,7 @@ def run_single_seed(
         output_dir=seed_dir,
         num_candidates=num_candidates,
         num_samples=num_samples,
-        client=chat_persona,  # also used to generate questions
+        client=chat_qgen,  # question generator client
     )
 
     save_json(comparison, seed_dir / "comparison.json")
@@ -458,13 +490,13 @@ def main():
     parser.add_argument(
         "--num-candidates",
         type=int,
-        default=5,
+        default=3,
         help="Number of candidate questions (k) for best-of-n"
     )
     parser.add_argument(
         "--num-samples",
         type=int,
-        default=3,
+        default=5,
         help="Number of samples per candidate (t) for expected gain estimation"
     )
     parser.add_argument(
@@ -477,6 +509,16 @@ def main():
         "--debug",
         action="store_true",
         help="Run in debug mode with single seed"
+    )
+    parser.add_argument(
+        "--use-logprobs",
+        action="store_true",
+        help="Use logprobs for probability estimation (default: text-based probability)"
+    )
+    parser.add_argument(
+        "--include-questions",
+        action="store_true",
+        help="Include questions (not just answers) in evaluator context"
     )
     args = parser.parse_args()
 
@@ -504,6 +546,8 @@ def main():
     print(f"Output directory: {exp_dir}")
     print(f"Candidates (k): {args.num_candidates}")
     print(f"Samples (t): {args.num_samples}")
+    print(f"Use logprobs: {args.use_logprobs}")
+    print(f"Include questions: {args.include_questions}")
     print(f"Running {config.num_seeds} seeds...")
 
     # Track all results
@@ -514,7 +558,9 @@ def main():
             comparison = run_single_seed(
                 config, seed, exp_dir,
                 num_candidates=args.num_candidates,
-                num_samples=args.num_samples
+                num_samples=args.num_samples,
+                use_logprobs=args.use_logprobs,
+                include_questions=args.include_questions,
             )
             all_results.append(comparison)
 

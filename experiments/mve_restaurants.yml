@@ -1,0 +1,24 @@
+name: mve_restaurants
+output_dir: experiments/outputs/runs/restaurants
+num_seeds: 1
+question_pool_size: 10
+
+episode:
+  persona: |
+    Mike, 45, accountant. Picks restaurants for weekly dinners with his wife.
+    Budget: prefers $$ places, occasionally $$$ for anniversaries. Never $$$$.
+
+    Loves: Italian food, steakhouses, anything with good meat.
+    Likes: Mexican, American comfort food, classic diners.
+    Dislikes: spicy food (can't handle heat), raw fish, vegan/vegetarian places.
+
+    Atmosphere preference: quiet enough to have a conversation, not too trendy.
+    Avoids: loud places, long waits, complicated menus, unfamiliar cuisines.
+  domain: restaurants
+  num_items: 15
+  num_pairs: 25
+  num_turns: 2
+  temperature: 0.1
+  max_tokens: 256
+
+  model: meta-llama/Llama-3.3-70B-Instruct-Turbo

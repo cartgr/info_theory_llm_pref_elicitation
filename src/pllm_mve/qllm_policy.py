@@ -43,16 +43,13 @@ def generate_candidate_questions(
     # Build system prompt
     system = (
         f"You are an expert interviewer trying to learn someone's preferences about {domain}. "
-        f"Generate informative questions that will help uncover their preferences.\n\n"
-        f"The items being considered are:\n" + "\n".join(f"- {item}" for item in items[:10]) +
-        (f"\n...and {len(items) - 10} more" if len(items) > 10 else "")
+        f"Generate informative questions that will help uncover their preferences."
     )
 
     # Build user prompt
     user = (
         f"{context}\n"
         f"Generate {pool_size} diverse questions to ask next. Each question should:\n"
-        f"- Be specific and targeted\n"
         f"- Help reveal preferences about {domain}\n"
         f"- Be natural and conversational\n"
         f"- Be different from the others (diverse approaches)\n\n"
@@ -198,13 +195,10 @@ def select_direct_question(
             context += f"Q{i+1}: {turn.question}\n"
             context += f"A{i+1}: {turn.answer}\n\n"
 
-    # System prompt: interviewer that knows the domain & items
+    # System prompt: interviewer that knows the domain (but not specific items)
     system = (
         f"You are an expert interviewer trying to learn someone's preferences about {domain}. "
-        f"Generate informative questions that will help uncover their preferences.\n\n"
-        f"The items being considered are:\n"
-        + "\n".join(f"- {item}" for item in items[:10])
-        + (f"\n...and {len(items) - 10} more" if len(items) > 10 else "")
+        f"Generate informative questions that will help uncover their preferences."
     )
 
     # User prompt: ask for one targeted, conversational question
